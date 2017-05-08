@@ -1,5 +1,4 @@
 //! Thread-safe connections on IrcStreams.
-#[cfg(feature = "ssl")] use std::error::Error as StdError;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter, Cursor, Result};
 #[cfg(feature = "ssl")] use std::io::Error;
@@ -10,7 +9,6 @@ use std::sync::Mutex;
 #[cfg(feature = "encode")] use encoding::DecoderTrap;
 #[cfg(feature = "encode")] use encoding::label::encoding_from_whatwg_label;
 #[cfg(feature = "ssl")] use openssl::ssl::{SslContext, SslMethod, SslStream};
-#[cfg(feature = "ssl")] use openssl::ssl::error::SslError;
 
 /// A connection.
 pub trait Connection {
@@ -92,10 +90,12 @@ impl NetConnection {
     #[cfg(feature = "ssl")]
     fn connect_ssl_internal(host: &str, port: u16) -> Result<NetReadWritePair> {
         let socket = try!(TcpStream::connect(&format!("{}:{}", host, port)[..]));
-        let ssl = try!(ssl_to_io(SslContext::new(SslMethod::Sslv23)));
-        let ssl_socket = try!(ssl_to_io(SslStream::connect_generic(&ssl, socket)));
-        Ok((BufReader::new(NetStream::Ssl(try!(ssl_socket.try_clone()))),
-            BufWriter::new(NetStream::Ssl(ssl_socket))))
+        let ssl_r = try!(ssl_to_io(SslContext::new(SslMethod::Sslv23)));
+        let ssl_w = try!(ssl_to_io(SslContext::new(SslMethod::Sslv23)));
+        let ssl_socket_r = try!(ssl_to_io(SslStream::connect(&ssl_r, try!(socket.try_clone()))));
+        let ssl_socket_w = try!(ssl_to_io(SslStream::connect(&ssl_w, socket)));
+        Ok((BufReader::new(NetStream::Ssl(ssl_socket_r)),
+            BufWriter::new(NetStream::Ssl(ssl_socket_w))))
     }
 
     /// Panics because SSL support is not compiled in.
@@ -107,11 +107,11 @@ impl NetConnection {
 
 /// Converts a Result<T, SslError> into an Result<T>.
 #[cfg(feature = "ssl")]
-fn ssl_to_io<T>(res: StdResult<T, SslError>) -> Result<T> {
+fn ssl_to_io<T, E>(res: StdResult<T, E>) -> Result<T> {
     match res {
         Ok(x) => Ok(x),
-        Err(e) => Err(Error::new(ErrorKind::Other,
-            &format!("An SSL error occurred. ({})", e.description())[..]
+        Err(_) => Err(Error::new(ErrorKind::Other,
+            &format!("An SSL error occurred.")[..]
         )),
     }
 }
